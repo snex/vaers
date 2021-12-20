@@ -15,14 +15,16 @@ class RawDatum < ApplicationRecord
   #
   # This method is idempotent
   def self.import_from_csv(base_filename)
-    data         = CSV.read("data/#{base_filename}VAERSDATA.csv",     headers: true, header_converters: lambda { |h| h.downcase }, encoding: 'iso-8859-1:utf-8')
-    symptom_data = CSV.read("data/#{base_filename}VAERSSYMPTOMS.csv", headers: true, header_converters: lambda { |h| h.downcase }, encoding: 'iso-8859-1:utf-8')
-    vax_data     = CSV.read("data/#{base_filename}VAERSVAX.csv",      headers: true, header_converters: lambda { |h| h.downcase }, encoding: 'iso-8859-1:utf-8')
+    symptom_headers = `head -n 1 data/#{base_filename}VAERSSYMPTOMS.csv`.chop.split(',').map(&:downcase)
+    vax_headers = `head -n 1 data/#{base_filename}VAERSVAX.csv`.chop.split(',').map(&:downcase)
 
-    data.each do |datum|
+    CSV.foreach("data/#{base_filename}VAERSDATA.csv", headers: true, header_converters: lambda { |h| h.downcase }, encoding: 'iso-8859-1:utf-8') do |datum|
       vaers_id = datum['vaers_id']
-      symptom_set = symptom_data.select { |s| s['vaers_id'] == vaers_id }.map(&:to_h)
-      vax_set = vax_data.select { |v| v['vaers_id'] == vaers_id }.map(&:to_h)
+      symptom_arr = `egrep '^#{vaers_id},' data/#{base_filename}VAERSSYMPTOMS.csv`.split("\r\n")
+      symptom_set = symptom_arr.map { |symptoms| symptom_headers.zip(symptoms.split(',')) }.map(&:to_h)
+      vax_arr = `egrep '^#{vaers_id},' data/#{base_filename}VAERSVAX.csv`.split("\r\n")
+      vax_set = vax_arr.map { |vaxes| vax_headers.zip(vaxes.split(',')) }.map(&:to_h)
+
       ImportRawDatumJob.perform_later(datum.to_h, symptom_set, vax_set)
     end
   end

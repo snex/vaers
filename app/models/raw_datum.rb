@@ -15,17 +15,33 @@ class RawDatum < ApplicationRecord
   #
   # This method is idempotent
   def self.import_from_csv(base_filename)
-    symptom_headers = `head -n 1 data/#{base_filename}VAERSSYMPTOMS.csv`.chop.split(',').map(&:downcase)
-    vax_headers = `head -n 1 data/#{base_filename}VAERSVAX.csv`.chop.split(',').map(&:downcase)
+    data_file = "data/#{base_filename}VAERSDATA.csv"
+    headers_size = `head -n 1 #{data_file}`.size
+    cursor = headers_size
 
-    CSV.foreach("data/#{base_filename}VAERSDATA.csv", headers: true, header_converters: lambda { |h| h.downcase }, encoding: 'iso-8859-1:utf-8') do |datum|
+    while chunk = IO.read(data_file, 1024*1024*10, cursor, encoding: 'iso-8859-1:utf-8') do
+      chunk_size = chunk.rindex("\r\n")
+      ImportCsvChunkJob.perform_later(base_filename, cursor, chunk_size)
+      cursor += chunk_size + 2
+    end
+  end
+
+  def self.import_csv_chunk(base_filename, chunk_start, chunk_size)
+    data_headers    = `head -n 1 data/#{base_filename}VAERSDATA.csv`.chop.split(',').map(&:downcase)
+    symptom_headers = `head -n 1 data/#{base_filename}VAERSSYMPTOMS.csv`.chop.split(',').map(&:downcase)
+    vax_headers     = `head -n 1 data/#{base_filename}VAERSVAX.csv`.chop.split(',').map(&:downcase)
+
+    chunk = IO.read("data/#{base_filename}VAERSDATA.csv", chunk_size, chunk_start, encoding: 'iso-8859-1:utf-8').force_encoding('ISO-8859-1')
+
+    CSV.parse(chunk) do |row|
+      datum = data_headers.zip(row).to_h
       vaers_id = datum['vaers_id']
       symptom_arr = `egrep '^#{vaers_id},' data/#{base_filename}VAERSSYMPTOMS.csv`.split("\r\n")
       symptom_set = symptom_arr.map { |symptoms| symptom_headers.zip(symptoms.split(',')) }.map(&:to_h)
       vax_arr = `egrep '^#{vaers_id},' data/#{base_filename}VAERSVAX.csv`.split("\r\n")
       vax_set = vax_arr.map { |vaxes| vax_headers.zip(vaxes.split(',')) }.map(&:to_h)
 
-      ImportRawDatumJob.perform_later(datum.to_h, symptom_set, vax_set)
+      ImportRawDatumJob.perform_later(datum, symptom_set, vax_set)
     end
   end
 
